@@ -32,11 +32,14 @@ def _ensure(package, import_name=None):
 
 
 _ensure("requests")
-_ensure("psycopg2-binary", "psycopg2")
+_ensure("pg8000")
 _ensure("databricks-sdk", "databricks.sdk")
 
+import ssl  # noqa: E402
+from urllib.parse import urlparse  # noqa: E402
+
 import requests  # noqa: E402
-import psycopg2  # noqa: E402
+import pg8000.dbapi as pg8000  # noqa: E402
 from databricks.sdk import WorkspaceClient  # noqa: E402
 
 WIKIMEDIA_USER_AGENT = os.environ.get(
@@ -62,6 +65,19 @@ def get_lakebase_url():
         return url
     secret = WorkspaceClient().secrets.get_secret(scope=SCOPE, key=KEY)
     return base64.b64decode(secret.value).decode("utf-8")
+
+
+def connect_lakebase(conn_str):
+    """pg8000 takes keyword args, not a postgresql:// URL, so parse it here."""
+    p = urlparse(conn_str)
+    return pg8000.connect(
+        user=p.username,
+        password=p.password,
+        host=p.hostname,
+        port=p.port or 5432,
+        database=p.path.lstrip("/"),
+        ssl_context=ssl.create_default_context(),
+    )
 
 
 def check_user_agent():
@@ -101,25 +117,27 @@ def check_wikimedia():
 
 
 def check_lakebase_connection():
-    conn = psycopg2.connect(get_lakebase_url())
+    conn = connect_lakebase(get_lakebase_url())
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            cur.fetchone()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        cur.close()
     finally:
         conn.close()
     return "connected"
 
 
 def check_pgvector():
-    conn = psycopg2.connect(get_lakebase_url())
+    conn = connect_lakebase(get_lakebase_url())
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
-            row = cur.fetchone()
-            if not row:
-                raise RuntimeError("vector extension not found — did schema.sql run?")
-            return f"vector {row[0]}"
+        cur = conn.cursor()
+        cur.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            raise RuntimeError("vector extension not found — did schema.sql run?")
+        return f"vector {row[0]}"
     finally:
         conn.close()
 

@@ -1,4 +1,8 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Trip Planner — Destination Ingestion Pipeline (Phase 2)
 # MAGIC
@@ -23,7 +27,7 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install requests psycopg2-binary --quiet
+# MAGIC %pip install requests pg8000 --quiet
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -67,30 +71,43 @@ for schema in ("bronze", "silver", "gold"):
 
 # COMMAND ----------
 
-import psycopg2
+import ssl
+from urllib.parse import urlparse
+
+import pg8000.dbapi as pg8000
 
 
 def get_lakebase_connection():
     conn_str = os.environ.get("LAKEBASE_URL") or dbutils.secrets.get(
         scope="trip-planner", key="lakebase-url"
     )
-    return psycopg2.connect(conn_str)
+    p = urlparse(conn_str)
+    return pg8000.connect(
+        user=p.username,
+        password=p.password,
+        host=p.hostname,
+        port=p.port or 5432,
+        database=p.path.lstrip("/"),
+        ssl_context=ssl.create_default_context(),
+    )
 
 
 def fetch_pending_destinations():
     """Destinations still missing coordinates or a real (non-placeholder) description."""
     conn = get_lakebase_connection()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, name, latitude, longitude, description, arrival_date, departure_date
-                FROM destinations
-                WHERE is_deleted = false
-                """
-            )
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, name, latitude, longitude, description, arrival_date, departure_date
+            FROM destinations
+            WHERE is_deleted = false
+            """
+        )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        cur.close()
+        return rows
     finally:
         conn.close()
 
@@ -197,7 +214,7 @@ destination_updates = []  # -> silver.destinations_enriched, then Lakebase desti
 failures = []
 
 for dest in destinations:
-    dest_id, name = dest["id"], dest["name"]
+    dest_id, name = str(dest["id"]), dest["name"]
     lat, lon = dest["latitude"], dest["longitude"]
 
     if lat is None or lon is None:
@@ -335,7 +352,7 @@ CREATE TABLE IF NOT EXISTS {SILVER}.destinations_enriched (
 """)
 
 if destination_updates:
-    name_by_id = {d["id"]: d["name"] for d in destinations}
+    name_by_id = {str(d["id"]): d["name"] for d in destinations}
     enriched_records = [
         {
             "destination_id": u["id"],
@@ -420,39 +437,40 @@ def write_back_to_lakebase(destination_updates, weather_rows):
         return
     conn = get_lakebase_connection()
     try:
-        with conn.cursor() as cur:
-            for u in destination_updates:
-                cur.execute(
-                    """
-                    UPDATE destinations
-                    SET latitude = COALESCE(%s, latitude),
-                        longitude = COALESCE(%s, longitude),
-                        description = COALESCE(%s, description)
-                    WHERE id = %s
-                    """,
-                    (u["latitude"], u["longitude"], u["description"], u["id"]),
-                )
-            for w in weather_rows:
-                cur.execute(
-                    """
-                    INSERT INTO weather_snapshots
-                        (destination_id, forecast_date, temperature_high_c, temperature_low_c,
-                         precipitation_probability_pct, air_quality_index, weather_code, source)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'open-meteo')
-                    ON CONFLICT (destination_id, forecast_date, source)
-                    DO UPDATE SET
-                        temperature_high_c = EXCLUDED.temperature_high_c,
-                        temperature_low_c = EXCLUDED.temperature_low_c,
-                        precipitation_probability_pct = EXCLUDED.precipitation_probability_pct,
-                        air_quality_index = EXCLUDED.air_quality_index,
-                        weather_code = EXCLUDED.weather_code,
-                        fetched_at = now()
-                    """,
-                    (
-                        w["destination_id"], w["forecast_date"], w["temperature_high_c"], w["temperature_low_c"],
-                        w["precipitation_probability_pct"], w["air_quality_index"], w["weather_code"],
-                    ),
-                )
+        cur = conn.cursor()
+        for u in destination_updates:
+            cur.execute(
+                """
+                UPDATE destinations
+                SET latitude = COALESCE(%s, latitude),
+                    longitude = COALESCE(%s, longitude),
+                    description = COALESCE(%s, description)
+                WHERE id = %s
+                """,
+                (u["latitude"], u["longitude"], u["description"], u["id"]),
+            )
+        for w in weather_rows:
+            cur.execute(
+                """
+                INSERT INTO weather_snapshots
+                    (destination_id, forecast_date, temperature_high_c, temperature_low_c,
+                     precipitation_probability_pct, air_quality_index, weather_code, source)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'open-meteo')
+                ON CONFLICT (destination_id, forecast_date, source)
+                DO UPDATE SET
+                    temperature_high_c = EXCLUDED.temperature_high_c,
+                    temperature_low_c = EXCLUDED.temperature_low_c,
+                    precipitation_probability_pct = EXCLUDED.precipitation_probability_pct,
+                    air_quality_index = EXCLUDED.air_quality_index,
+                    weather_code = EXCLUDED.weather_code,
+                    fetched_at = now()
+                """,
+                (
+                    w["destination_id"], w["forecast_date"], w["temperature_high_c"], w["temperature_low_c"],
+                    w["precipitation_probability_pct"], w["air_quality_index"], w["weather_code"],
+                ),
+            )
+        cur.close()
         conn.commit()
     finally:
         conn.close()
