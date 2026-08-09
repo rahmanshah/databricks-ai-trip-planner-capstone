@@ -3,8 +3,9 @@ Trip Planner UI — Databricks App "trip-planner-ui".
 
 Deliberately "dumb": create/view trips, destinations, activities, and
 toggle packing items. No scheduling logic lives here — generating or
-changing the itinerary happens through the agent (chat panel, added in a
-later step), not by duplicating mcp_server's logic in a second place.
+changing the itinerary happens through the agent (agent-trip-planner, a
+separately deployed app — see README), not by duplicating mcp_server's
+logic in a second place.
 
 No real auth system — every action here acts as a single default user
 (get_or_create_default_user), which is a reasonable simplification for a
