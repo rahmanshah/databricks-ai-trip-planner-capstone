@@ -12,8 +12,8 @@ Tracking progress phase by phase. Updated as each is completed.
 - [x] **Phase 1** — Lakebase schema
 - [x] **Phase 2** — Spark ingestion pipeline (Open-Meteo + Wikimedia → Unity Catalog) — *verified end-to-end*
 - [x] **Phase 3** — Embeddings + pgvector search in Lakebase — *verified end-to-end*
-- [ ] **Phase 4** — MCP server + AI agent — MCP server (`mcp-trip-planner`) built, deployed, and tested end-to-end via AI Playground; exporting to a standalone `agent-trip-planner` app is the remaining step
-- [ ] **Phase 5** — Databricks App frontend
+- [x] **Phase 4** — MCP server + AI agent — `mcp-trip-planner` and standalone `agent-trip-planner` both deployed and verified end-to-end via AI Playground
+- [ ] **Phase 5** — Databricks App frontend — `trip-planner-ui` (CRUD dashboard) deployed and verified end-to-end against live data; the chat panel calling `agent-trip-planner` directly is the remaining piece
 - [ ] **Phase 6** — Change data capture → Delta analytics
 - [ ] **Phase 7** — End-to-end test + submission
 
@@ -47,7 +47,7 @@ Vector search lives **inside Lakebase** via the `pgvector` extension rather than
 | Data pipeline in Spark | `pipeline/ingest_destinations.py` — geocode, weather, air quality, Wikipedia → bronze/silver/gold Delta tables |
 | Third-party API integration | Open-Meteo (geocoding, weather, air quality) + Wikimedia (destination descriptions) |
 | Unstructured data processing | Destination descriptions, attraction blurbs, and user notes chunked and embedded (`pipeline/ingest_embeddings.py`) |
-| Databricks App with a frontend | `trip-planner-ui` (itinerary/packing dashboard) + `agent-trip-planner` (chat) |
+| Databricks App with a frontend | `trip-planner-ui` (deployed, verified end-to-end against live data — trips/destinations/activities/itinerary/packing) + `agent-trip-planner` (chat) |
 | AI agent with real read/write tools | `mcp_server/` (deployed as `mcp-trip-planner`, verified via AI Playground) — search, live conditions with reasoning, list/generate/reschedule/move-or-remove itinerary, packing list |
 | CDF from Lakebase into a Delta table | See [Known limitations](#known-limitations--free-edition-notes) — native Lakebase CDF is unreliable on Free Edition right now; using a Lakehouse Federation + scheduled MERGE fallback into a Delta table with native Delta CDF enabled |
 
@@ -77,15 +77,16 @@ mcp_server/                # -> Databricks App "mcp-trip-planner" (deployed, tes
                              # build_packing_list, move_or_remove_itinerary_item
   app.yaml
   requirements.txt
-ui_app/                    # -> Databricks App "trip-planner-ui"
-  app.py                   # browser routes at /, scripted routes under /api/
-  lakebase.py
+ui_app/                    # -> Databricks App "trip-planner-ui" (deployed, verified)
+  app.py                   # Flask routes: trips, destinations, activities, packing (all browser-facing)
+  lakebase.py               # same pg8000 connection pattern as mcp_server
   templates/
-  setup_secrets.py
+    base.html
+    index.html              # trip list + create-trip form
+    trip_detail.html        # destinations/activities, read-only itinerary, packing toggle
   app.yaml
   requirements.txt
 check_environment.py       # Phase 0 sanity check: outbound reach + pgvector extension
-test_sync.py                # smoke test using the notebook token-exchange auth pattern
 screenshots/                # working-system evidence, referenced in the README
 ```
 
@@ -128,6 +129,9 @@ Learned the hard way across the reference repos — documenting up front so they
 - **Tool names that are too similar cause the LLM to pick the wrong one** — `get_itinerary` (read) and `generate_itinerary` (write, schedules new items) were confused by the model in testing; a request to "generate the itinerary again" called the read-only tool and silently did nothing. Renamed to `list_itinerary` to reduce the name collision, and made both tools' docstrings explicitly cross-reference each other and state up front whether they write to the database.
 - **LLMs will invent a placeholder value (e.g. `"the trip id"`) for a required parameter rather than asking, if it's not actually in context** — same pattern as the malformed-id issue above, but preventable at the source. Every tool parameter that takes an id now has explicit docstring language: "never invent, guess, or use placeholder text — ask the user instead." Worth remembering when testing across separate Playground sessions: a trip id established in one conversation doesn't carry into a new one, so give it explicitly in the first message of any fresh session rather than assuming it's still "known."
 - **The exported `agent-trip-planner` app's auto-generated chat UI can throw a client-side `"Unhandled item type or structure"` error on the second message in a session**, even though the underlying response is a well-formed message — this is a frontend rendering gap in the "Export to Databricks Apps" template (a genuinely new feature as of mid-2026), not a failure in the agent, tools, or Lakebase underneath. Workaround: refresh the page and re-ask. Given this, `ui_app/`'s own chat panel (Phase 5) — which calls this same deployed agent directly from code we control — is the more dependable place to demo the agent, not this template's widget.
+- **Each Databricks App needs its own secret resource wired, even when it's the same underlying secret.** Adding the `lakebase-url` resource to `mcp-trip-planner` did not make it available to `trip-planner-ui` — every app that reads `LAKEBASE_URL` needs its own App resources → + Add resource → Secret step pointing at the same scope/key.
+- **`build_packing_list`'s dedup is exact-match (case-insensitive), not fuzzy** — confirmed visually in `trip-planner-ui`: the agent's baseline `"Passport or ID"` suggestion sits right next to a seeded `"Passport"` item rather than being recognized as a duplicate. Not a bug, just a real limitation of exact-string dedup worth knowing before it looks like one in a demo.
+- **App-to-app calls between two Databricks Apps use a simpler auth path than notebook-to-app calls** — `WorkspaceClient().config.authenticate()` with no explicit credentials, using the calling app's own service principal, rather than the token-exchange dance notebooks need. Relevant once `ui_app`'s chat panel calls `agent-trip-planner` directly; the exact request/response shape the exported agent template expects is still unverified as of Phase 5.
 
 ## Screenshots
 
@@ -147,6 +151,17 @@ Phase 4 (MCP server + agent), verified end-to-end:
 
 **`agent-trip-planner`** — the standalone chat agent, exported from AI Playground via "Export to Databricks Apps," running as its own deployed Databricks App.
 ![agent-trip-planner chat UI](screenshots/05-agent-trip-planner-chat.png)
+
+Phase 5 (frontend), verified against live data — not empty-state screenshots:
+
+**`trip-planner-ui` trip list** — the seeded "Pacific Northwest Hiking Trip" rendering with its real dates, proving the UI reads the same live Lakebase data every other phase writes to.
+![Trip list](screenshots/06-ui-trip-list.png)
+
+**Trip detail with real pipeline data** — Seattle's actual Wikipedia description (from Phase 2) and its activities rendering correctly, not placeholder text.
+![Trip detail with real data](screenshots/07-ui-trip-detail-real-data.png)
+
+**Packing list toggle working end-to-end** — click → POST → Lakebase write → redirect → re-render, with the toggled item correctly sorting to the bottom and getting struck through.
+![Packing list toggle](screenshots/08-ui-packing-toggle-working.png)
 
 ## Acknowledgements
 
