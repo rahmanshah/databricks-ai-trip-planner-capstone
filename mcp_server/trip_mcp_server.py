@@ -142,14 +142,21 @@ def get_live_conditions(destination_id: str, target_date: str) -> dict:
 
 
 @mcp.tool()
-def get_itinerary(trip_id: str) -> dict:
-    """Read the full current itinerary for a trip — every scheduled item
-    with its activity name, destination, date, and status. USE FOR:
-    answering "what's on my itinerary" questions, and — importantly —
-    looking up a real itinerary_item_id before calling reschedule_activity
-    or move_or_remove_itinerary_item. Those ids aren't guessable from
-    conversation (e.g. "the hike" or "Tuesday's museum visit") — call this
-    first to find the matching id from context.
+def list_itinerary(trip_id: str) -> dict:
+    """Read-only: list the full current itinerary for a trip — every
+    scheduled item with its activity name, destination, date, and status.
+    This does NOT schedule anything new or change any dates — for that,
+    call generate_itinerary instead. USE FOR: answering "what's on my
+    itinerary" questions, and looking up a real itinerary_item_id before
+    calling reschedule_activity or move_or_remove_itinerary_item — those
+    ids aren't guessable from conversation (e.g. "the hike" or "Tuesday's
+    museum visit"), so call this first to find the matching id from
+    context.
+
+    trip_id must be a real id already known from context (the user gave
+    it, or it appeared in an earlier tool result in this conversation) —
+    never invent, guess, or use placeholder text for it. If you don't
+    actually have it, ask the user for their trip id instead of guessing.
     """
     overview = lakebase_broker.get_trip_overview(trip_id)
     if not overview:
@@ -176,13 +183,24 @@ def get_itinerary(trip_id: str) -> dict:
 
 @mcp.tool()
 def generate_itinerary(trip_id: str) -> dict:
-    """Build or extend the day-by-day itinerary for a trip by scheduling
-    any activities not on it yet. USE FOR: creating an initial plan, or
-    filling in newly-added activities. Distributes activities across each
+    """Actually schedules new activities and writes to the database — this
+    is not a read. Build or extend the day-by-day itinerary for a trip by
+    scheduling any activities not on it yet (including ones that were
+    previously removed via move_or_remove_itinerary_item — removing an
+    item doesn't delete the activity itself, so it's still a valid
+    candidate here). USE FOR: creating an initial plan, or filling in
+    activities that aren't currently scheduled — including right after a
+    removal, if the intent is to reschedule rather than drop it for good.
+    To just view the current itinerary without changing anything, call
+    list_itinerary instead. Distributes activities across each
     destination's arrival/departure window, and when cached weather is
     available, schedules outdoor activities on the lowest-precipitation
     days first. Never touches activities already on the itinerary — use
     reschedule_activity or move_or_remove_itinerary_item for those.
+
+    trip_id must be a real id already known from context — never invent,
+    guess, or use placeholder text for it. If you don't actually have it,
+    ask the user for their trip id instead of guessing.
     """
     overview = lakebase_broker.get_trip_overview(trip_id)
     if not overview:
@@ -211,8 +229,8 @@ def reschedule_activity(itinerary_item_id: str, reason: str, new_date: str = Non
     why. USE FOR: responding to a bad forecast on the activity's current
     date — typically after calling get_live_conditions and finding
     should_reschedule_outdoor_activities is true. itinerary_item_id must be
-    a real id from the trip's existing itinerary (e.g. from
-    generate_itinerary's output) — never invent one. If new_date isn't
+    a real id from the trip's existing itinerary (call list_itinerary
+    first if you don't already have it) — never invent one. If new_date isn't
     given, picks the destination's best remaining day by cached
     precipitation. reason should be a short, human-readable explanation —
     it's stored and shown directly to the user, so write it for them, not
@@ -265,6 +283,10 @@ def build_packing_list(trip_id: str) -> dict:
     generating a starting packing list, or refreshing it after activities
     or weather change. Never removes or duplicates items already on the
     list.
+
+    trip_id must be a real id already known from context — never invent,
+    guess, or use placeholder text for it. If you don't actually have it,
+    ask the user for their trip id instead of guessing.
     """
     overview = lakebase_broker.get_trip_overview(trip_id)
     if not overview:
@@ -298,8 +320,11 @@ def move_or_remove_itinerary_item(itinerary_item_id: str, action: str, new_date:
     to Tuesday" or "take the museum off the schedule" — for weather-driven
     changes, prefer reschedule_activity instead, since it records a reason
     and can pick the new date itself. itinerary_item_id must be a real id
-    from the trip's existing itinerary — never invent one. action must be
-    'move' or 'remove'; 'move' requires new_date (ISO YYYY-MM-DD).
+    from the trip's existing itinerary (call list_itinerary first if you
+    don't already have it) — never invent one. Removing an item does not
+    delete the underlying activity — it can be scheduled again later via
+    generate_itinerary. action must be 'move' or 'remove'; 'move' requires
+    new_date (ISO YYYY-MM-DD).
     """
     item = lakebase_broker.get_itinerary_item(itinerary_item_id)
     if not item:
