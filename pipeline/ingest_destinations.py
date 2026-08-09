@@ -34,11 +34,15 @@
 
 import json
 import os
+import re
 import time
 from datetime import date, timedelta
 
 import requests
 from pyspark.sql import functions as F
+from pyspark.sql.types import (
+    StructType, StructField, StringType, DoubleType, IntegerType,
+)
 from delta.tables import DeltaTable
 
 CATALOG = "trip_planner"
@@ -52,7 +56,8 @@ OPEN_METEO_AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-qual
 WIKIPEDIA_SUMMARY_URL = "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
 WIKIPEDIA_ACTION_API_URL = "https://en.wikipedia.org/w/api.php"
 
-MAX_FORECAST_DAYS = 16  # Open-Meteo's free-tier forecast horizon
+MAX_FORECAST_DAYS = 15  # Open-Meteo's 16-day forecast counts today as day one,
+                          # so the furthest valid end_date is today+15, not today+16
 
 # Required by Wikimedia's API etiquette — replace with a real contact before
 # running for real, or requests may be throttled without warning.
@@ -120,13 +125,21 @@ def fetch_pending_destinations():
 
 # COMMAND ----------
 
+def _raise_with_body(resp):
+    """Open-Meteo/Wikimedia return a JSON {"error": ..., "reason": ...} body on
+    4xx responses — raise_for_status() alone discards it, which is exactly the
+    detail needed to debug a bad parameter."""
+    if not resp.ok:
+        raise requests.HTTPError(f"{resp.status_code} for {resp.url}: {resp.text[:500]}")
+
+
 def geocode_destination(name):
     resp = requests.get(
         OPEN_METEO_GEOCODE_URL,
         params={"name": name, "count": 1, "language": "en", "format": "json"},
         timeout=10,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
     data = resp.json()
     results = data.get("results") or []
     if not results:
@@ -145,7 +158,7 @@ def fetch_forecast(lat, lon, start_date, end_date):
         "timezone": "auto",
     }
     resp = requests.get(OPEN_METEO_FORECAST_URL, params=params, timeout=10)
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp.json()
 
 
@@ -159,8 +172,34 @@ def fetch_air_quality(lat, lon, start_date, end_date):
         "timezone": "auto",
     }
     resp = requests.get(OPEN_METEO_AIR_QUALITY_URL, params=params, timeout=10)
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp.json()
+
+
+def _parse_allowed_end_date(error_text):
+    """Extract the upper bound from Open-Meteo's own
+    "... out of allowed range from X to Y" message, if present."""
+    m = re.search(r"out of allowed range from \S+ to (\d{4}-\d{2}-\d{2})", error_text)
+    return date.fromisoformat(m.group(1)) if m else None
+
+
+def fetch_air_quality_safe(lat, lon, start, end):
+    """Air quality's forecast horizon is shorter than the regular weather
+    API's, and — as seen already — hardcoding a guessed day count risks
+    drifting off by a day again. Self-corrects against whatever Open-Meteo
+    actually reports as allowed instead. Returns None (not an exception) if
+    AQI genuinely can't be fetched for this window, so callers can fall back
+    to weather-without-AQI rather than losing the whole day's data."""
+    try:
+        return fetch_air_quality(lat, lon, start, end)
+    except requests.HTTPError as e:
+        allowed_end = _parse_allowed_end_date(str(e))
+        if not allowed_end or allowed_end < start:
+            return None
+        try:
+            return fetch_air_quality(lat, lon, start, min(end, allowed_end))
+        except requests.HTTPError:
+            return None
 
 
 def fetch_wikipedia_summary(name):
@@ -168,7 +207,7 @@ def fetch_wikipedia_summary(name):
     resp = requests.get(url, headers={"User-Agent": WIKIMEDIA_USER_AGENT}, timeout=10)
     if resp.status_code == 404:
         return None, {"status": 404}
-    resp.raise_for_status()
+    _raise_with_body(resp)
     data = resp.json()
     return data.get("extract"), data
 
@@ -188,7 +227,7 @@ def fetch_nearby_attractions(lat, lon, limit=5, radius_m=8000):
         headers={"User-Agent": WIKIMEDIA_USER_AGENT},
         timeout=10,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
     data = resp.json()
     hits = data.get("query", {}).get("geosearch", [])
     return [
@@ -267,14 +306,21 @@ for dest in destinations:
         try:
             forecast = fetch_forecast(lat, lon, start, end)
             bronze_records.append({"destination_id": dest_id, "source": "forecast", "payload": json.dumps(forecast)})
-            aq = fetch_air_quality(lat, lon, start, end)
-            bronze_records.append({"destination_id": dest_id, "source": "air_quality", "payload": json.dumps(aq)})
+        except Exception as e:
+            failures.append((dest_id, name, f"forecast failed: {e}"))
+            forecast = None
 
+        if forecast is not None:
             aqi_by_date = {}
-            hourly = aq.get("hourly", {})
-            for t, v in zip(hourly.get("time", []), hourly.get("us_aqi", [])):
-                if v is not None:
-                    aqi_by_date.setdefault(t[:10], []).append(v)
+            aq = fetch_air_quality_safe(lat, lon, start, end)
+            if aq is not None:
+                bronze_records.append({"destination_id": dest_id, "source": "air_quality", "payload": json.dumps(aq)})
+                hourly = aq.get("hourly", {})
+                for t, v in zip(hourly.get("time", []), hourly.get("us_aqi", [])):
+                    if v is not None:
+                        aqi_by_date.setdefault(t[:10], []).append(v)
+            else:
+                failures.append((dest_id, name, "air quality unavailable for this window — weather saved without AQI"))
 
             daily = forecast.get("daily", {})
             for i, d in enumerate(daily.get("time", [])):
@@ -288,8 +334,6 @@ for dest in destinations:
                     "weather_code": int(daily["weathercode"][i]) if daily["weathercode"][i] is not None else None,
                     "air_quality_index": int(round(sum(aqi_values) / len(aqi_values))) if aqi_values else None,
                 })
-        except Exception as e:
-            failures.append((dest_id, name, f"weather/air quality failed: {e}"))
         time.sleep(0.2)
 
 print(f"Collected {len(bronze_records)} raw responses, {len(weather_rows)} weather rows, "
@@ -328,9 +372,19 @@ CREATE TABLE IF NOT EXISTS {SILVER}.weather_daily (
 ) USING DELTA
 """)
 
+WEATHER_ROW_SCHEMA = StructType([
+    StructField("destination_id", StringType(), False),
+    StructField("forecast_date", StringType(), False),
+    StructField("temperature_high_c", DoubleType(), True),
+    StructField("temperature_low_c", DoubleType(), True),
+    StructField("precipitation_probability_pct", IntegerType(), True),
+    StructField("weather_code", IntegerType(), True),
+    StructField("air_quality_index", IntegerType(), True),
+])
+
 if weather_rows:
     weather_df = (
-        spark.createDataFrame(weather_rows)
+        spark.createDataFrame(weather_rows, schema=WEATHER_ROW_SCHEMA)
         .withColumn("forecast_date", F.to_date("forecast_date"))
         .withColumn("updated_at", F.current_timestamp())
     )
@@ -354,6 +408,14 @@ CREATE TABLE IF NOT EXISTS {SILVER}.destinations_enriched (
 ) USING DELTA
 """)
 
+ENRICHED_ROW_SCHEMA = StructType([
+    StructField("destination_id", StringType(), False),
+    StructField("name", StringType(), True),
+    StructField("latitude", DoubleType(), True),
+    StructField("longitude", DoubleType(), True),
+    StructField("wikipedia_extract", StringType(), True),
+])
+
 if destination_updates:
     name_by_id = {str(d["id"]): d["name"] for d in destinations}
     enriched_records = [
@@ -366,7 +428,7 @@ if destination_updates:
         }
         for u in destination_updates
     ]
-    enriched_df = spark.createDataFrame(enriched_records).withColumn("updated_at", F.current_timestamp())
+    enriched_df = spark.createDataFrame(enriched_records, schema=ENRICHED_ROW_SCHEMA).withColumn("updated_at", F.current_timestamp())
     (DeltaTable.forName(spark, f"{SILVER}.destinations_enriched").alias("t")
         .merge(enriched_df.alias("s"), "t.destination_id = s.destination_id")
         .whenMatchedUpdateAll()
@@ -376,8 +438,14 @@ if destination_updates:
 
 # COMMAND ----------
 
+ATTRACTION_ROW_SCHEMA = StructType([
+    StructField("destination_id", StringType(), False),
+    StructField("attraction_name", StringType(), True),
+    StructField("distance_m", DoubleType(), True),
+])
+
 if attraction_rows:
-    attractions_df = spark.createDataFrame(attraction_rows).withColumn("updated_at", F.current_timestamp())
+    attractions_df = spark.createDataFrame(attraction_rows, schema=ATTRACTION_ROW_SCHEMA).withColumn("updated_at", F.current_timestamp())
     # Overwrite each run — simplest correct behavior since attraction lists rarely change.
     attractions_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true") \
         .saveAsTable(f"{SILVER}.nearby_attractions")
