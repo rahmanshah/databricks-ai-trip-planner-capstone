@@ -15,7 +15,7 @@ Tracking progress phase by phase. Updated as each is completed.
 - [x] **Phase 4** — MCP server + AI agent — `mcp-trip-planner` and standalone `agent-trip-planner` both deployed and verified end-to-end via AI Playground
 - [x] **Phase 5** — Databricks App frontend — `trip-planner-ui` (CRUD dashboard) deployed and verified end-to-end against live data. A chat panel embedding `agent-trip-planner` directly was scoped, researched (see Known limitations), and deliberately not built — the capstone requirements (frontend + agent with real tools) are already fully met by two separately deployed, both-working apps, and the panel would have added UX polish at the cost of the project's least-tested integration for no functional gap it was actually closing
 - [x] **Phase 6** — Change data capture → Delta analytics — `lakebase_trip_planner` registered in Unity Catalog, `pipeline/sync_cdc.py` verified end-to-end (incremental sync, Delta history tables with native CDF, analytics)
-- [ ] **Phase 7** — End-to-end test + submission
+- [x] **Phase 7** — End-to-end test + submission — full walkthrough on data never touched before: new trip created in `trip-planner-ui` → destination added → `ingest_destinations.py` enriched it live → `ingest_embeddings.py` embedded it → agent searched, scheduled, and packed for it → `sync_cdc.py` synced it. Found and fixed one real bug along the way (see Known limitations). Submission: zip of this repo, via the [capstone submission link](https://learn.dataexpert.io/assignment/4904)
 
 ## Architecture
 
@@ -137,6 +137,7 @@ Learned the hard way across the reference repos — documenting up front so they
 - **Querying a registered Lakebase catalog requires Serverless SQL Warehouse compute** — Pro/Classic warehouses return a permission error, and with no compute attached at all Catalog Explorer just shows "No data to display, active cluster or warehouse is required." Free Edition's default serverless compute satisfies this without extra setup, but it's not automatic — compute has to be explicitly selected in Catalog Explorer the first time.
 - **`agent_actions` only logs write actions, not every MCP tool call.** `generate_itinerary`, `reschedule_activity`, `build_packing_list`, and `move_or_remove_itinerary_item` call `log_agent_action`; `search_destinations`, `get_live_conditions`, and `list_itinerary` (pure reads) deliberately don't. A schema comment originally said "every MCP tool call," which overstated this — corrected in `db/schema.sql`. Confirmed via real data: 7 tools used extensively in testing, only 4 tool names ever appear in `agent_actions_history`.
 - **History tables built on soft-delete source data can make naive `GROUP BY status` analytics misleading.** `move_or_remove_itinerary_item`'s "remove" action only ever sets `is_deleted = true` — it never touches `status`, since a removed item was never rescheduled. Confirmed in testing: `itinerary_items_history` showed `status = 'planned', count = 5` after a remove-then-regenerate cycle, which reads as "5 active items" but is actually 4 active + 1 correctly-preserved-but-deleted row. The sync captured this exactly right (a history table should keep deleted rows, not drop them); the fix was adding `is_deleted` to the analytics query's `GROUP BY`, not changing what gets synced.
+- **The agent doesn't know today's actual date without being told.** `get_live_conditions` asked for "tomorrow" resolved to `2024-03-21` in one Playground session — the model fell back to a guess unrelated to the real date. `weather_broker.py`'s own date-range validation caught it cleanly (`"available": false, "reason": "...is in the past"` rather than silently using wrong data), but the tool is unreliable for real use until the agent actually knows what day it is. Confirmed fix: a Playground system prompt stating the current date resolved "tomorrow" correctly on the next call. Deliberately **not** carried into the permanently-deployed `agent-trip-planner` (would require a re-export) — documented here as a known gap rather than silently left for a future user to rediscover.
 
 ## Screenshots
 
@@ -178,6 +179,20 @@ Phase 6 (CDC → Delta analytics), verified end-to-end:
 
 **Corrected itinerary analytics** — `is_deleted` broken out explicitly, catching the gap where a naive status count would have conflated an active item with a correctly-preserved-but-removed one.
 ![Itinerary analytics, corrected](screenshots/11-itinerary-analytics-corrected.png)
+
+Phase 7 (end-to-end test), on a trip and destination created fresh for this test — never touched by any prior phase's development or debugging:
+
+**New destination, real pipeline data** — Boulder, CO added through the UI with nothing but a name and dates, then `ingest_destinations.py` enriched it with a real Wikipedia description on the very next run, no code changes needed for a destination the pipeline had never seen before.
+![New destination gets real data end-to-end](screenshots/12-e2e-new-destination-real-data.png)
+
+**Agent scheduling a brand-new trip** — `generate_itinerary` correctly scheduled both of Boulder's activities using the same weather-prioritization logic proven back in Phase 4, now on entirely new data.
+![generate_itinerary on the new trip](screenshots/13-e2e-generate-itinerary-new-trip.png)
+
+**A real bug, caught in the act** — `get_live_conditions` asked for "tomorrow" and got `2024-03-21`, since the model has no way to know today's actual date on its own.
+![Date-awareness bug found](screenshots/14-e2e-date-bug-found.png)
+
+**...and fixed** — a one-line system prompt stating the current date, then the identical question resolving correctly and returning real forecast data.
+![Date-awareness bug fixed](screenshots/15-e2e-date-bug-fixed.png)
 
 ## Acknowledgements
 
