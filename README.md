@@ -1,5 +1,7 @@
 # databricks-ai-trip-planner-capstone
 
+> Rename this repo before pushing if you picked a different name — this README assumes `databricks-ai-trip-planner-capstone`.
+
 An AI-powered trip and outdoor activity planner built on Databricks Free Edition. Users save destinations and activities, and an AI agent builds a weather-aware itinerary — rescheduling outdoor plans when rain or poor air quality is forecast, and explaining why.
 
 Built for the [Databricks AI Bootcamp capstone](https://github.com/EcZachly/databricks-ai-bootcamp-capstone) ("AI Trip and Outdoor Activity Planner" option), following patterns from three reference implementations — see [Acknowledgements](#acknowledgements).
@@ -8,10 +10,10 @@ Built for the [Databricks AI Bootcamp capstone](https://github.com/EcZachly/data
 
 Tracking progress phase by phase. Updated as each is completed.
 
-- [ ] **Phase 0** — Environment setup (Free Edition, LinkedIn verification, Lakebase instance, Git folder) — *in progress*
-- [ ] **Phase 1** — Lakebase schema
-- [ ] **Phase 2** — Spark ingestion pipeline (Open-Meteo + Wikimedia → Unity Catalog)
-- [ ] **Phase 3** — Embeddings + pgvector search in Lakebase
+- [x] **Phase 0** — Environment setup (Free Edition, LinkedIn verification, Lakebase instance, Git folder)
+- [x] **Phase 1** — Lakebase schema
+- [x] **Phase 2** — Spark ingestion pipeline (Open-Meteo + Wikimedia → Unity Catalog) — *verified end-to-end*
+- [ ] **Phase 3** — Embeddings + pgvector search in Lakebase — *in progress*
 - [ ] **Phase 4** — MCP server + AI agent
 - [ ] **Phase 5** — Databricks App frontend
 - [ ] **Phase 6** — Change data capture → Delta analytics
@@ -64,6 +66,7 @@ db/
                             # weather_snapshots, packing_items, agent_actions,
                             # destination_embeddings (pgvector), cdc watermark table
   seed.sql
+  secret.py                 # one-time: stores the Lakebase connection string as a Databricks secret
   grant_app_access.sql     # only needed if the schema-run role differs from the app's role
 pipeline/
   ingest_destinations.py   # geocode + Open-Meteo + Wikimedia -> bronze/silver/gold (Unity Catalog)
@@ -90,17 +93,26 @@ test_sync.py                # smoke test using the notebook token-exchange auth 
 
 ## Setup
 
-1. [ ] Sign up for [Databricks Free Edition](https://www.databricks.com/learn/free-edition) and complete **LinkedIn verification** (unlocks outbound internet beyond the default trusted-domain allowlist — required to reach Open-Meteo and Wikimedia).
-2. [ ] Push this repo to GitHub, then in the Databricks workspace: **Workspace → Create → Git folder**, point it at the repo.
-3. [ ] **Catalog → Lakebase → Create Lakebase instance**. Once **Available**, under **Roles & Databases**, create a password-auth role and copy the connection string.
-4. [ ] Run `check_environment.py` (`%sh python check_environment.py` from a notebook cell in the Git folder) to confirm serverless compute can reach `open-meteo.com` and `*.wikimedia.org`, and that `CREATE EXTENSION vector;` works on the Lakebase instance.
-5. [ ] Create a Unity Catalog catalog/schema for the pipeline, e.g. `trip_planner.bronze` / `.silver` / `.gold`.
+1. [x] Sign up for [Databricks Free Edition](https://www.databricks.com/learn/free-edition) and complete **LinkedIn verification** (unlocks outbound internet beyond the default trusted-domain allowlist — required to reach Open-Meteo and Wikimedia).
+2. [x] Push this repo to GitHub, then in the Databricks workspace: **Workspace → Create → Git folder**, point it at the repo.
+3. [x] **Catalog → Lakebase → Create Lakebase instance**. Once **Available**, under **Roles & Databases**, create a password-auth role and copy the connection string.
+4. [x] Run `db/schema.sql` in the Lakebase SQL editor, then `db/seed.sql`.
+5. [x] Run `%sh python db/secret.py` from a notebook cell — prompts (via `getpass`) for the Lakebase connection string from step 3 and stores it as a Databricks secret (`trip-planner`/`lakebase-url`). If `getpass` misbehaves in a `%sh` cell, use the Web Terminal instead.
+6. [x] Edit the `WIKIMEDIA_USER_AGENT` placeholder in both `check_environment.py` and `pipeline/ingest_destinations.py` — Wikimedia's API etiquette requires a real contact, not a placeholder or `example.com` address.
+7. [x] Run `check_environment.py` (`%sh python check_environment.py`) — confirms outbound reach to Open-Meteo (geocoding/forecast/air-quality) and Wikimedia, that the User-Agent was actually edited, and that the Lakebase connection + `pgvector` extension both work. Fix any `[FAIL]` line before moving on.
+8. [x] Run `pipeline/ingest_destinations.py` as an actual notebook (not the file-editor "Run" button — it creates the `trip_planner` catalog/schemas/tables itself on first run, no manual pre-creation needed).
 
 ## Known limitations / Free Edition notes
 
 Learned the hard way across the reference repos — documenting up front so they don't cost time twice:
 
 - **Outbound internet is allowlisted by default.** LinkedIn verification is required before any external API call will succeed from serverless compute.
+- **`psycopg2-binary` can abort the entire Python kernel (SIGABRT, exit code 134) on Free Edition serverless notebooks** — same failure class as other packages that bundle compiled native extensions (`cv2`, `pymssql`) hitting missing/mismatched shared libraries in the container. Switched to `pg8000` (pure Python, no compiled extensions) for all Lakebase connections in notebooks; it takes keyword args rather than a `postgresql://` URL, so connection helpers parse the URL manually.
+- **Postgres UUID columns come back as Python `uuid.UUID` objects**, not strings — from both `pg8000` and `psycopg2`. Spark's `createDataFrame()` schema inference has no idea what to do with a raw `uuid.UUID` object and fails outright. Cast to `str()` at the point each id is read from the database, before it flows into anything Spark-bound.
+- **Spark's `createDataFrame()` schema inference from a list of Python dicts is fragile** — it fails if a field's value is `None` across every sampled row (can't infer *any* type) or if the same field is `int` in some rows and `float` in others (e.g. a JSON API returning `1200` vs `1234.5` for the same logical field). Give explicit `StructType` schemas to any DataFrame built from external API data rather than relying on inference — this class of bug hit `destination_id`, `distance_m`, and `air_quality_index` in `pipeline/ingest_destinations.py` before all `createDataFrame()` calls there were pinned to explicit schemas.
+- **Open-Meteo's "16-day forecast" counts today as day one** — the furthest valid `end_date` is `today + 15`, not `today + 16`. Off by one here gets a `400` with a `reason` field naming the actual allowed range.
+- **Open-Meteo's air-quality API has its own, shorter forecast horizon that isn't documented alongside the main weather API's** and can drift day to day — don't hardcode a day count for it. `fetch_air_quality_safe()` in `pipeline/ingest_destinations.py` parses the allowed range straight out of the API's own error message and retries once with the corrected window, falling back to weather-without-AQI rather than losing the whole row if it still can't get air-quality data.
+- **Always capture the response body on 4xx errors from Open-Meteo/Wikimedia**, not just the status code — both return a JSON `{"error": true, "reason": "..."}` body that names the exact problem, which `raise_for_status()` alone discards.
 - **Lakebase's native Change Data Feed is Public Preview and currently unreliable on Free Edition** — there are open reports of the destination Delta table never appearing after a successful-looking setup. Plan is to fall back to registering Lakebase as a read-only Unity Catalog foreign catalog and running a scheduled incremental `MERGE` into a Delta table with native `delta.enableChangeDataFeed = true`, rather than depending on the Lakebase-side preview.
 - **Databricks Apps only allow programmatic (Bearer-token) access under `/api/`** — routes outside that prefix expect a browser session and return 401 to scripts/curl.
 - **Calling a deployed app from a notebook needs a token-exchange step**, not a plain `WorkspaceClient().config.authenticate()` call — that only works for service-principal/app-to-app callers.
