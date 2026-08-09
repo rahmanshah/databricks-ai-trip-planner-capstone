@@ -24,6 +24,15 @@ mcp = FastMCP(
     port=int(os.environ.get("DATABRICKS_APP_PORT", 8000)),
 )
 
+# Load the embedding model now, at startup, rather than lazily on the first
+# search_destinations call. Lazy loading meant the first real call paid the
+# one-time cost of downloading/initializing sentence-transformers inline —
+# in testing this took long enough to trip a stream timeout (RST_STREAM /
+# INTERNAL_ERROR), with the retry succeeding fast once the model was
+# already in memory. Loading it here means that cost happens once during
+# app startup, not during a user's first search.
+lakebase_broker.get_embedding_model()
+
 
 # ---------------------------------------------------------------------------
 # Scheduling helpers (not tools — internal to generate_itinerary / reschedule_activity)

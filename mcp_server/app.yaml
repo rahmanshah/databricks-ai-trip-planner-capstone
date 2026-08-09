@@ -1,0 +1,22 @@
+# Databricks App config for mcp-trip-planner.
+#
+# The LAKEBASE_URL value below is NOT set here — app.yaml only references a
+# resource by name. The actual wiring happens once, in the Databricks UI:
+#   App page -> App resources -> + Add resource -> Secret
+#     scope: trip-planner
+#     key:   lakebase-url
+#     resource key (the name you assign it): lakebase-url
+#     permission: READ
+# Whatever you type as the "resource key" there is what valueFrom references
+# below — if you name it something other than lakebase-url, update this file
+# to match.
+#
+# Databricks Apps listen on port 8000 by default; trip_mcp_server.py reads
+# the actual port from DATABRICKS_APP_PORT (a system-injected env var), so
+# nothing needs to be set here for that.
+
+command: ["python", "trip_mcp_server.py"]
+
+env:
+  - name: LAKEBASE_URL
+    valueFrom: lakebase-url

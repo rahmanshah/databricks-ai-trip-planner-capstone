@@ -1,0 +1,4 @@
+mcp<2.0.0
+pg8000
+sentence-transformers
+requests
