@@ -14,7 +14,7 @@ Tracking progress phase by phase. Updated as each is completed.
 - [x] **Phase 3** — Embeddings + pgvector search in Lakebase — *verified end-to-end*
 - [x] **Phase 4** — MCP server + AI agent — `mcp-trip-planner` and standalone `agent-trip-planner` both deployed and verified end-to-end via AI Playground
 - [ ] **Phase 5** — Databricks App frontend — `trip-planner-ui` (CRUD dashboard) deployed and verified end-to-end against live data; the chat panel calling `agent-trip-planner` directly is the remaining piece
-- [ ] **Phase 6** — Change data capture → Delta analytics
+- [x] **Phase 6** — Change data capture → Delta analytics — `lakebase_trip_planner` registered in Unity Catalog, `pipeline/sync_cdc.py` verified end-to-end (incremental sync, Delta history tables with native CDF, analytics)
 - [ ] **Phase 7** — End-to-end test + submission
 
 ## Architecture
@@ -49,7 +49,7 @@ Vector search lives **inside Lakebase** via the `pgvector` extension rather than
 | Unstructured data processing | Destination descriptions, attraction blurbs, and user notes chunked and embedded (`pipeline/ingest_embeddings.py`) |
 | Databricks App with a frontend | `trip-planner-ui` (deployed, verified end-to-end against live data — trips/destinations/activities/itinerary/packing) + `agent-trip-planner` (chat) |
 | AI agent with real read/write tools | `mcp_server/` (deployed as `mcp-trip-planner`, verified via AI Playground) — search, live conditions with reasoning, list/generate/reschedule/move-or-remove itinerary, packing list |
-| CDF from Lakebase into a Delta table | See [Known limitations](#known-limitations--free-edition-notes) — native Lakebase CDF is unreliable on Free Edition right now; using a Lakehouse Federation + scheduled MERGE fallback into a Delta table with native Delta CDF enabled |
+| CDF from Lakebase into a Delta table | `pipeline/sync_cdc.py` — verified end-to-end: `lakebase_trip_planner` registered as a read-only Unity Catalog catalog, incremental `MERGE` into Delta history tables with native `delta.enableChangeDataFeed = true`. See [Known limitations](#known-limitations--free-edition-notes) for why this path was used instead of Lakebase's own native CDF preview |
 
 ## Third-party APIs
 
@@ -69,6 +69,7 @@ db/
 pipeline/
   ingest_destinations.py   # geocode + Open-Meteo + Wikimedia -> bronze/silver/gold (Unity Catalog)
   ingest_embeddings.py     # run as a notebook, not a standalone file (see notes below)
+  sync_cdc.py               # Phase 6: Lakebase -> Delta history tables, incremental MERGE + native CDF
 mcp_server/                # -> Databricks App "mcp-trip-planner" (deployed, tested)
   weather_broker.py         # live Open-Meteo calls + threshold-based reasoning
   lakebase_broker.py        # pgvector search, trip/destination reads, itinerary/packing writes
@@ -132,6 +133,10 @@ Learned the hard way across the reference repos — documenting up front so they
 - **Each Databricks App needs its own secret resource wired, even when it's the same underlying secret.** Adding the `lakebase-url` resource to `mcp-trip-planner` did not make it available to `trip-planner-ui` — every app that reads `LAKEBASE_URL` needs its own App resources → + Add resource → Secret step pointing at the same scope/key.
 - **`build_packing_list`'s dedup is exact-match (case-insensitive), not fuzzy** — confirmed visually in `trip-planner-ui`: the agent's baseline `"Passport or ID"` suggestion sits right next to a seeded `"Passport"` item rather than being recognized as a duplicate. Not a bug, just a real limitation of exact-string dedup worth knowing before it looks like one in a demo.
 - **App-to-app calls between two Databricks Apps use a simpler auth path than notebook-to-app calls** — `WorkspaceClient().config.authenticate()` with no explicit credentials, using the calling app's own service principal, rather than the token-exchange dance notebooks need. Relevant once `ui_app`'s chat panel calls `agent-trip-planner` directly; the exact request/response shape the exported agent template expects is still unverified as of Phase 5.
+- **Registering Lakebase in Unity Catalog looks different depending on the Lakebase tier.** The **Provisioned** tier has a "Catalogs" entry in its own product sidebar (Lakebase Postgres → Provisioned → instance → Catalogs → Add catalog). The **Autoscaling** tier (what this project uses) doesn't show that entry at all — registration instead happens through **Catalog Explorer → Create a catalog → Type: Lakebase Postgres**, which explicitly supports both tiers via a Database type toggle. Same underlying capability, different UI entry point — not a missing feature.
+- **Querying a registered Lakebase catalog requires Serverless SQL Warehouse compute** — Pro/Classic warehouses return a permission error, and with no compute attached at all Catalog Explorer just shows "No data to display, active cluster or warehouse is required." Free Edition's default serverless compute satisfies this without extra setup, but it's not automatic — compute has to be explicitly selected in Catalog Explorer the first time.
+- **`agent_actions` only logs write actions, not every MCP tool call.** `generate_itinerary`, `reschedule_activity`, `build_packing_list`, and `move_or_remove_itinerary_item` call `log_agent_action`; `search_destinations`, `get_live_conditions`, and `list_itinerary` (pure reads) deliberately don't. A schema comment originally said "every MCP tool call," which overstated this — corrected in `db/schema.sql`. Confirmed via real data: 7 tools used extensively in testing, only 4 tool names ever appear in `agent_actions_history`.
+- **History tables built on soft-delete source data can make naive `GROUP BY status` analytics misleading.** `move_or_remove_itinerary_item`'s "remove" action only ever sets `is_deleted = true` — it never touches `status`, since a removed item was never rescheduled. Confirmed in testing: `itinerary_items_history` showed `status = 'planned', count = 5` after a remove-then-regenerate cycle, which reads as "5 active items" but is actually 4 active + 1 correctly-preserved-but-deleted row. The sync captured this exactly right (a history table should keep deleted rows, not drop them); the fix was adding `is_deleted` to the analytics query's `GROUP BY`, not changing what gets synced.
 
 ## Screenshots
 
@@ -162,6 +167,17 @@ Phase 5 (frontend), verified against live data — not empty-state screenshots:
 
 **Packing list toggle working end-to-end** — click → POST → Lakebase write → redirect → re-render, with the toggled item correctly sorting to the bottom and getting struck through.
 ![Packing list toggle](screenshots/08-ui-packing-toggle-working.png)
+
+Phase 6 (CDC → Delta analytics), verified end-to-end:
+
+**`lakebase_trip_planner` registered in Unity Catalog** — every table from `db/schema.sql` visible and queryable through the read-only catalog mirror, once Serverless SQL Warehouse compute is attached.
+![Lakebase catalog registered](screenshots/09-lakebase-catalog-registered.png)
+
+**First incremental sync run** — real row counts across every watched table, not zeros, since every table already had real data from Phases 1–5.
+![CDC sync summary](screenshots/10-cdc-sync-summary.png)
+
+**Corrected itinerary analytics** — `is_deleted` broken out explicitly, catching the gap where a naive status count would have conflated an active item with a correctly-preserved-but-removed one.
+![Itinerary analytics, corrected](screenshots/11-itinerary-analytics-corrected.png)
 
 ## Acknowledgements
 

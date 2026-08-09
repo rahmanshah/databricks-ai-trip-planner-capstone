@@ -173,8 +173,11 @@ CREATE TRIGGER trg_packing_items_updated_at
 
 -- ----------------------------------------------------------------------------
 -- agent_actions
--- Append-only audit log of every MCP tool call — this is what makes the
--- CDF/analytics requirement meaningful instead of an empty table.
+-- Append-only audit log of write actions the agent takes (generate/
+-- reschedule/pack/move-or-remove) — this is what makes the CDF/analytics
+-- requirement meaningful instead of an empty table. Read-only tools
+-- (search, live conditions, list itinerary) deliberately don't log here —
+-- not every MCP tool call, just the ones that change data.
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS agent_actions (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
