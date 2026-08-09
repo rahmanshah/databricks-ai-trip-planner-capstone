@@ -1,7 +1,5 @@
 # databricks-ai-trip-planner-capstone
 
-> Rename this repo before pushing if you picked a different name — this README assumes `databricks-ai-trip-planner-capstone`.
-
 An AI-powered trip and outdoor activity planner built on Databricks Free Edition. Users save destinations and activities, and an AI agent builds a weather-aware itinerary — rescheduling outdoor plans when rain or poor air quality is forecast, and explaining why.
 
 Built for the [Databricks AI Bootcamp capstone](https://github.com/EcZachly/databricks-ai-bootcamp-capstone) ("AI Trip and Outdoor Activity Planner" option), following patterns from three reference implementations — see [Acknowledgements](#acknowledgements).
