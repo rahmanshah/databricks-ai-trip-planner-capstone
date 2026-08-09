@@ -41,7 +41,7 @@ from databricks.sdk import WorkspaceClient  # noqa: E402
 
 WIKIMEDIA_USER_AGENT = os.environ.get(
     "WIKIMEDIA_USER_AGENT",
-    "trip-planner-capstone/0.1 (REPLACE_WITH_YOUR_CONTACT_EMAIL)",
+    "trip-planner-capstone/0.1 (rahman.shah@protonmail.ch)",
 )
 
 SCOPE, KEY = "trip-planner", "lakebase-url"

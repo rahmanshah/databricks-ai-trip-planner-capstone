@@ -57,6 +57,7 @@ WIKIMEDIA_USER_AGENT = os.environ.get(
     "trip-planner-capstone/0.1 (rahman.shah@protonmail.ch)",
 )
 
+spark.sql(f"CREATE CATALOG IF NOT EXISTS {CATALOG}")
 for schema in ("bronze", "silver", "gold"):
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {CATALOG}.{schema}")
 
