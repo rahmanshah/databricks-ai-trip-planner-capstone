@@ -142,6 +142,39 @@ def get_live_conditions(destination_id: str, target_date: str) -> dict:
 
 
 @mcp.tool()
+def get_itinerary(trip_id: str) -> dict:
+    """Read the full current itinerary for a trip — every scheduled item
+    with its activity name, destination, date, and status. USE FOR:
+    answering "what's on my itinerary" questions, and — importantly —
+    looking up a real itinerary_item_id before calling reschedule_activity
+    or move_or_remove_itinerary_item. Those ids aren't guessable from
+    conversation (e.g. "the hike" or "Tuesday's museum visit") — call this
+    first to find the matching id from context.
+    """
+    overview = lakebase_broker.get_trip_overview(trip_id)
+    if not overview:
+        return {"success": False, "reason": f"No trip found with id {trip_id}."}
+
+    activity_by_id = {
+        a["id"]: {"name": a["name"], "destination": d["name"]}
+        for d in overview["destinations"] for a in d["activities"]
+    }
+
+    items = [
+        {
+            "itinerary_item_id": item["id"],
+            "activity_name": activity_by_id.get(item["activity_id"], {}).get("name"),
+            "destination_name": activity_by_id.get(item["activity_id"], {}).get("destination"),
+            "scheduled_date": item["scheduled_date"].isoformat() if item["scheduled_date"] else None,
+            "status": item["status"],
+            "reschedule_reason": item["reschedule_reason"],
+        }
+        for item in overview["itinerary_items"]
+    ]
+    return {"success": True, "trip_title": overview["trip"]["title"], "items": items}
+
+
+@mcp.tool()
 def generate_itinerary(trip_id: str) -> dict:
     """Build or extend the day-by-day itinerary for a trip by scheduling
     any activities not on it yet. USE FOR: creating an initial plan, or
