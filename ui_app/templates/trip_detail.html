@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}{{ trip.title }} — Trip Planner{% endblock %}
+{% block content %}
+<div class="card">
+    <h2>{{ trip.title }}</h2>
+    <span class="badge {{ trip.status }}">{{ trip.status }}</span>
+    {% if trip.start_date %}
+        <div class="muted">{{ trip.start_date }} → {{ trip.end_date }}</div>
+    {% endif %}
+    <p class="muted">Trip id: {{ trip.id }} — give this to the agent to generate the itinerary, reschedule activities, or build the packing list.</p>
+</div>
+
+<div class="card">
+    <h2>Destinations</h2>
+    {% if destinations %}
+        {% for dest in destinations %}
+            <div class="dest-block">
+                <h3>{{ dest.name }}</h3>
+                {% if dest.arrival_date %}
+                    <div class="muted">{{ dest.arrival_date }} → {{ dest.departure_date }}</div>
+                {% endif %}
+                {% if dest.description %}
+                    <p>{{ dest.description[:280] }}{% if dest.description|length > 280 %}…{% endif %}</p>
+                {% else %}
+                    <p class="muted">No description yet — run pipeline/ingest_destinations.py to fetch it.</p>
+                {% endif %}
+
+                <h4 style="margin-bottom: 0.25rem;">Activities</h4>
+                {% if dest.activities %}
+                    <ul class="plain">
+                        {% for a in dest.activities %}
+                            <li>
+                                {{ a.name }}
+                                <span class="badge {{ 'outdoor' if a.is_outdoor else 'indoor' }}">{{ 'outdoor' if a.is_outdoor else 'indoor' }}</span>
+                                <span class="muted">{{ a.category }}{% if a.duration_minutes %} · {{ a.duration_minutes }} min{% endif %}</span>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="empty">No activities yet.</p>
+                {% endif %}
+
+                <form class="inline" method="POST" action="{{ url_for('add_activity', destination_id=dest.id) }}">
+                    <input type="hidden" name="trip_id" value="{{ trip.id }}">
+                    <label>Name
+                        <input type="text" name="name" placeholder="Skyline Trail hike" required>
+                    </label>
+                    <label>Category
+                        <select name="category">
+                            <option value="hiking">hiking</option>
+                            <option value="sightseeing">sightseeing</option>
+                            <option value="museum">museum</option>
+                            <option value="dining">dining</option>
+                            <option value="water_sports">water_sports</option>
+                            <option value="other" selected>other</option>
+                        </select>
+                    </label>
+                    <label>Duration (min)
+                        <input type="number" name="duration_minutes" min="0" step="15">
+                    </label>
+                    <label style="flex-direction: row; align-items: center; gap: 0.4rem;">
+                        <input type="checkbox" name="is_outdoor"> Outdoor
+                    </label>
+                    <button type="submit" class="small">Add activity</button>
+                </form>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="empty">No destinations yet — add one below.</p>
+    {% endif %}
+
+    <h3>Add a destination</h3>
+    <form class="inline" method="POST" action="{{ url_for('add_destination', trip_id=trip.id) }}">
+        <label>Name
+            <input type="text" name="name" placeholder="Seattle, WA" required>
+        </label>
+        <label>Arrival
+            <input type="date" name="arrival_date">
+        </label>
+        <label>Departure
+            <input type="date" name="departure_date">
+        </label>
+        <button type="submit">Add destination</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Itinerary</h2>
+    <p class="muted">Read-only here — ask the agent to generate, reschedule, or reorganize it.</p>
+    {% if itinerary_items %}
+        <ul class="plain">
+            {% for item in itinerary_items %}
+                <li>
+                    <strong>{{ item.scheduled_date or 'Unscheduled' }}</strong> —
+                    {{ item.activity_name }} ({{ item.destination_name }})
+                    <span class="badge {{ item.status }}">{{ item.status }}</span>
+                    {% if item.reschedule_reason %}
+                        <div class="muted">Rescheduled: {{ item.reschedule_reason }}</div>
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p class="empty">Nothing scheduled yet.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Packing list</h2>
+    {% if packing_items %}
+        <ul class="plain">
+            {% for item in packing_items %}
+                <li class="{{ 'packed' if item.is_packed else '' }}">
+                    <form method="POST" action="{{ url_for('toggle_packing_item', item_id=item.id) }}" style="display: inline;">
+                        <input type="hidden" name="trip_id" value="{{ trip.id }}">
+                        <button type="submit" class="small">{{ '✓' if item.is_packed else '☐' }}</button>
+                    </form>
+                    {{ item.item_name }}
+                    <span class="muted">{{ item.category }} · added by {{ item.added_by }}</span>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p class="empty">No packing items yet — ask the agent to build the list.</p>
+    {% endif %}
+</div>
+{% endblock %}

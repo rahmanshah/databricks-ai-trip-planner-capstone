@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Trip Planner{% endblock %}</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #1e293b;
+            --border: #334155;
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --accent: #38bdf8;
+            --success: #4ade80;
+            --error: #f87171;
+            --warn: #fbbf24;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+        }
+        header { padding: 1.25rem 2rem; border-bottom: 1px solid var(--border); }
+        header a { color: var(--text); text-decoration: none; font-weight: 600; font-size: 1.25rem; }
+        main { max-width: 900px; margin: 0 auto; padding: 2rem; }
+        .flash { padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; }
+        .flash.success { background: rgba(74, 222, 128, 0.15); color: var(--success); border: 1px solid rgba(74, 222, 128, 0.3); }
+        .flash.error { background: rgba(248, 113, 113, 0.15); color: var(--error); border: 1px solid rgba(248, 113, 113, 0.3); }
+        .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem 1.5rem; margin-bottom: 1.25rem; }
+        .card h2, .card h3 { margin-top: 0; }
+        a.trip-link { color: var(--accent); text-decoration: none; font-weight: 600; }
+        a.trip-link:hover { text-decoration: underline; }
+        .muted { color: var(--muted); font-size: 0.85rem; }
+        form.inline { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end; margin-top: 0.75rem; }
+        form.inline label { display: flex; flex-direction: column; font-size: 0.8rem; color: var(--muted); gap: 0.25rem; }
+        input, select {
+            background: var(--bg); border: 1px solid var(--border); color: var(--text);
+            padding: 0.45rem 0.6rem; border-radius: 6px; font-size: 0.9rem;
+        }
+        input[type="checkbox"] { width: auto; }
+        button {
+            background: var(--accent); color: #0f172a; border: none; padding: 0.5rem 1rem;
+            border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.9rem;
+        }
+        button:hover { opacity: 0.9; }
+        button.small { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+        .badge { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+        .badge.planning, .badge.planned { background: rgba(56, 189, 248, 0.15); color: var(--accent); }
+        .badge.confirmed, .badge.completed { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+        .badge.rescheduled { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
+        .badge.cancelled { background: rgba(248, 113, 113, 0.15); color: var(--error); }
+        .badge.outdoor { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+        .badge.indoor { background: rgba(148, 163, 184, 0.15); color: var(--muted); }
+        ul.plain { list-style: none; padding: 0; margin: 0; }
+        ul.plain li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+        ul.plain li:last-child { border-bottom: none; }
+        .packed { text-decoration: line-through; color: var(--muted); }
+        .empty { color: var(--muted); font-style: italic; padding: 0.5rem 0; }
+        .dest-block { margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+        .dest-block:last-of-type { border-bottom: none; }
+    </style>
+</head>
+<body>
+    <header><a href="{{ url_for('index') }}">Trip Planner</a></header>
+    <main>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

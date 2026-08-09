@@ -1,0 +1,20 @@
+# Databricks App config for trip-planner-ui.
+#
+# Same secret-wiring pattern as mcp_server/app.yaml — LAKEBASE_URL isn't set
+# here, only referenced. Add the resource once via this app's own page:
+#   App resources -> + Add resource -> Secret
+#     scope: trip-planner
+#     key:   lakebase-url
+#     resource key: lakebase-url
+#     permission: READ
+# This is a separate step from adding it to mcp-trip-planner — each app's
+# resource wiring is independent even when pointing at the same secret.
+#
+# Databricks Apps listen on port 8000 by default; app.py reads the actual
+# port from DATABRICKS_APP_PORT (system-injected), so nothing to set here.
+
+command: ["python", "app.py"]
+
+env:
+  - name: LAKEBASE_URL
+    valueFrom: lakebase-url
