@@ -120,9 +120,12 @@ def get_live_conditions(destination_id: str, target_date: str) -> dict:
     """Look up live weather, air quality, and an explicit reschedule
     recommendation with reasoning for one destination on one date. USE FOR:
     checking whether a day's forecast is good for outdoor plans, or
-    explaining why an activity should move. target_date must be an ISO date
-    string (YYYY-MM-DD) within roughly the next 15 days — Open-Meteo's
-    forecast horizon.
+    explaining why an activity should move. destination_id must be a real
+    id already returned by search_destinations or otherwise known from
+    context — never invent, guess, or use placeholder text for it; if you
+    don't have a real id yet, call search_destinations first. target_date
+    must be an ISO date string (YYYY-MM-DD) within roughly the next 15
+    days — Open-Meteo's forecast horizon.
     """
     destination = lakebase_broker.get_destination(destination_id)
     if not destination:
@@ -174,10 +177,13 @@ def reschedule_activity(itinerary_item_id: str, reason: str, new_date: str = Non
     """Move an already-scheduled activity to a different day and record
     why. USE FOR: responding to a bad forecast on the activity's current
     date — typically after calling get_live_conditions and finding
-    should_reschedule_outdoor_activities is true. If new_date isn't given,
-    picks the destination's best remaining day by cached precipitation.
-    reason should be a short, human-readable explanation — it's stored and
-    shown directly to the user, so write it for them, not as a log line.
+    should_reschedule_outdoor_activities is true. itinerary_item_id must be
+    a real id from the trip's existing itinerary (e.g. from
+    generate_itinerary's output) — never invent one. If new_date isn't
+    given, picks the destination's best remaining day by cached
+    precipitation. reason should be a short, human-readable explanation —
+    it's stored and shown directly to the user, so write it for them, not
+    as a log line.
     """
     item = lakebase_broker.get_itinerary_item(itinerary_item_id)
     if not item:
@@ -258,8 +264,9 @@ def move_or_remove_itinerary_item(itinerary_item_id: str, action: str, new_date:
     itinerary entirely. USE FOR: direct user requests like "move the hike
     to Tuesday" or "take the museum off the schedule" — for weather-driven
     changes, prefer reschedule_activity instead, since it records a reason
-    and can pick the new date itself. action must be 'move' or 'remove';
-    'move' requires new_date (ISO YYYY-MM-DD).
+    and can pick the new date itself. itinerary_item_id must be a real id
+    from the trip's existing itinerary — never invent one. action must be
+    'move' or 'remove'; 'move' requires new_date (ISO YYYY-MM-DD).
     """
     item = lakebase_broker.get_itinerary_item(itinerary_item_id)
     if not item:

@@ -16,6 +16,7 @@ API call needed here.
 import json
 import os
 import ssl
+import uuid as uuid_module
 from urllib.parse import urlparse
 
 import pg8000.dbapi as pg8000
@@ -56,6 +57,19 @@ def vector_literal(values):
     """pg8000 has no built-in pgvector adapter — format as pgvector's own
     text representation and cast with ::vector in the SQL instead."""
     return "[" + ",".join(f"{v:.8f}" for v in values) + "]"
+
+
+def _is_valid_uuid(value):
+    """Guards every id-lookup function below. Without this, a malformed or
+    hallucinated id from the agent (seen in testing: the literal string
+    "Seattle's destination ID" instead of a real uuid) hits Postgres
+    directly and comes back as a raw 'invalid input syntax for type uuid'
+    error instead of the clean not-found response callers expect."""
+    try:
+        uuid_module.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def get_embedding_model():
@@ -121,6 +135,8 @@ def search_destinations(query, top_k=5):
 # ---------------------------------------------------------------------------
 
 def get_destination(destination_id):
+    if not _is_valid_uuid(destination_id):
+        return None
     conn = get_lakebase_connection()
     try:
         cur = conn.cursor()
@@ -145,6 +161,8 @@ def get_destination(destination_id):
 
 
 def get_itinerary_item(itinerary_item_id):
+    if not _is_valid_uuid(itinerary_item_id):
+        return None
     conn = get_lakebase_connection()
     try:
         cur = conn.cursor()
@@ -173,6 +191,8 @@ def get_trip_overview(trip_id):
     weather_snapshots) + existing itinerary_items. The one read call
     generate_itinerary, build_packing_list, and reschedule_activity all
     build their logic on top of."""
+    if not _is_valid_uuid(trip_id):
+        return None
     conn = get_lakebase_connection()
     try:
         cur = conn.cursor()
