@@ -191,7 +191,10 @@ def fetch_nearby_attractions(lat, lon, limit=5, radius_m=8000):
     resp.raise_for_status()
     data = resp.json()
     hits = data.get("query", {}).get("geosearch", [])
-    return [{"title": h["title"], "distance_m": h.get("dist")} for h in hits], data
+    return [
+        {"title": h["title"], "distance_m": float(h["dist"]) if h.get("dist") is not None else None}
+        for h in hits
+    ], data
 
 # COMMAND ----------
 
@@ -224,7 +227,7 @@ for dest in destinations:
             if not coords:
                 failures.append((dest_id, name, "geocoding returned no results"))
                 continue
-            lat, lon = coords["latitude"], coords["longitude"]
+            lat, lon = float(coords["latitude"]), float(coords["longitude"])
             destination_updates.append({"id": dest_id, "latitude": lat, "longitude": lon, "description": None})
         except Exception as e:
             failures.append((dest_id, name, f"geocoding failed: {e}"))
@@ -279,11 +282,11 @@ for dest in destinations:
                 weather_rows.append({
                     "destination_id": dest_id,
                     "forecast_date": d,
-                    "temperature_high_c": daily["temperature_2m_max"][i],
-                    "temperature_low_c": daily["temperature_2m_min"][i],
-                    "precipitation_probability_pct": daily["precipitation_probability_max"][i],
-                    "weather_code": daily["weathercode"][i],
-                    "air_quality_index": round(sum(aqi_values) / len(aqi_values)) if aqi_values else None,
+                    "temperature_high_c": float(daily["temperature_2m_max"][i]) if daily["temperature_2m_max"][i] is not None else None,
+                    "temperature_low_c": float(daily["temperature_2m_min"][i]) if daily["temperature_2m_min"][i] is not None else None,
+                    "precipitation_probability_pct": int(daily["precipitation_probability_max"][i]) if daily["precipitation_probability_max"][i] is not None else None,
+                    "weather_code": int(daily["weathercode"][i]) if daily["weathercode"][i] is not None else None,
+                    "air_quality_index": int(round(sum(aqi_values) / len(aqi_values))) if aqi_values else None,
                 })
         except Exception as e:
             failures.append((dest_id, name, f"weather/air quality failed: {e}"))
