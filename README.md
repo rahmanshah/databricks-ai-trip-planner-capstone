@@ -12,7 +12,7 @@ Tracking progress phase by phase. Updated as each is completed.
 - [x] **Phase 1** — Lakebase schema
 - [x] **Phase 2** — Spark ingestion pipeline (Open-Meteo + Wikimedia → Unity Catalog) — *verified end-to-end*
 - [x] **Phase 3** — Embeddings + pgvector search in Lakebase — *verified end-to-end*
-- [ ] **Phase 4** — MCP server + AI agent — *up next*
+- [ ] **Phase 4** — MCP server + AI agent — MCP server (`mcp-trip-planner`) built, deployed, and tested end-to-end via AI Playground; exporting to a standalone `agent-trip-planner` app is the remaining step
 - [ ] **Phase 5** — Databricks App frontend
 - [ ] **Phase 6** — Change data capture → Delta analytics
 - [ ] **Phase 7** — End-to-end test + submission
@@ -48,7 +48,7 @@ Vector search lives **inside Lakebase** via the `pgvector` extension rather than
 | Third-party API integration | Open-Meteo (geocoding, weather, air quality) + Wikimedia (destination descriptions) |
 | Unstructured data processing | Destination descriptions, attraction blurbs, and user notes chunked and embedded (`pipeline/ingest_embeddings.py`) |
 | Databricks App with a frontend | `trip-planner-ui` (itinerary/packing dashboard) + `agent-trip-planner` (chat) |
-| AI agent with real read/write tools | `mcp_server/` — search, live conditions, generate itinerary, reschedule, packing list, edit itinerary |
+| AI agent with real read/write tools | `mcp_server/` (deployed as `mcp-trip-planner`, verified via AI Playground) — search, live conditions with reasoning, list/generate/reschedule/move-or-remove itinerary, packing list |
 | CDF from Lakebase into a Delta table | See [Known limitations](#known-limitations--free-edition-notes) — native Lakebase CDF is unreliable on Free Edition right now; using a Lakehouse Federation + scheduled MERGE fallback into a Delta table with native Delta CDF enabled |
 
 ## Third-party APIs
@@ -69,11 +69,12 @@ db/
 pipeline/
   ingest_destinations.py   # geocode + Open-Meteo + Wikimedia -> bronze/silver/gold (Unity Catalog)
   ingest_embeddings.py     # run as a notebook, not a standalone file (see notes below)
-mcp_server/                # -> Databricks App "mcp-trip-planner"
-  weather_broker.py
-  wikimedia_broker.py
-  lakebase_broker.py
-  trip_mcp_server.py       # @mcp.tool functions only, thin wrappers over the brokers above
+mcp_server/                # -> Databricks App "mcp-trip-planner" (deployed, tested)
+  weather_broker.py         # live Open-Meteo calls + threshold-based reasoning
+  lakebase_broker.py        # pgvector search, trip/destination reads, itinerary/packing writes
+  trip_mcp_server.py        # @mcp.tool functions: health, search_destinations, get_live_conditions,
+                             # list_itinerary, generate_itinerary, reschedule_activity,
+                             # build_packing_list, move_or_remove_itinerary_item
   app.yaml
   requirements.txt
 ui_app/                    # -> Databricks App "trip-planner-ui"
@@ -119,6 +120,12 @@ Learned the hard way across the reference repos — documenting up front so they
 - **No relevance floor on search results — flagged for Phase 4.** With only a handful of chunks in the index so far, pgvector's `<=>` always returns *something* as the top match regardless of whether it's actually relevant. Confirmed while testing `search_destinations()` at the end of `pipeline/ingest_embeddings.py`: a query about a coastal city with hiking nearby returned a Mount Rainier clouds/rain chunk as the top result at only 21% similarity — mechanically correct, semantically wrong. Same gap the `weather-intelligence` reference repo hit (they used ~40% as a rough cutoff). The Phase 4 MCP `search_destinations` tool should treat low-similarity results as "no good match" rather than confidently returning the top-k regardless.
 - **Registering an MCP server as a Unity Catalog "MCP Service" via AI Gateway fails with 401 on Free Edition** (the Managed MCP Servers preview isn't enabled). Use the **Custom MCP Server** tool picker in AI Playground/Agent Bricks instead — any deployed app named `mcp-*` is auto-discovered there with no extra registration step.
 - **Grant table access explicitly** if the Postgres role that ran `db/schema.sql` differs from the role the deployed app connects with (`db/grant_app_access.sql`).
+- **The `mcp` Python SDK released a breaking `2.0.0`** that renamed `FastMCP` to `MCPServer` and moved the module — `from mcp.server.fastmcp import FastMCP` (what our code and Databricks' own official docs both use) stops working with a `ModuleNotFoundError` on `mcp>=2.0.0`. Pin `mcp<2.0.0` in `mcp_server/requirements.txt`.
+- **Databricks Apps secrets aren't declared in `app.yaml` itself** — only referenced there. The actual scope/key wiring happens once via the app's own page → App resources → + Add resource → Secret, where you assign it a "resource key" name; `app.yaml` then just has `env: - name: LAKEBASE_URL / valueFrom: <that resource key>`. (Declaring it directly in `app.yaml` is only possible via Databricks Asset Bundles, which this project doesn't use.)
+- **Lazy-loading a heavy model (e.g. the embedding model for `search_destinations`) on first request risked a stream timeout** — the first real call in testing failed with `RST_STREAM`/`INTERNAL_ERROR` while `sentence-transformers` downloaded and initialized inline; an immediate retry succeeded fast once it was cached in memory. Fixed by loading the model once at app startup (module level in `trip_mcp_server.py`) instead of lazily inside the tool function — same root lesson as the notebook torch-install issue, different mechanism.
+- **Malformed or hallucinated ids from the agent hit Postgres directly and leak a raw `invalid input syntax for type uuid` error** if nothing validates them first — confirmed in testing when the model passed literal placeholder text (`"Seattle's destination ID"`, `"the trip id"`) instead of a real id. Every `lakebase_broker.py` function that looks up a single row by id now validates the format with Python's `uuid` module before querying, returning a clean not-found response instead.
+- **Tool names that are too similar cause the LLM to pick the wrong one** — `get_itinerary` (read) and `generate_itinerary` (write, schedules new items) were confused by the model in testing; a request to "generate the itinerary again" called the read-only tool and silently did nothing. Renamed to `list_itinerary` to reduce the name collision, and made both tools' docstrings explicitly cross-reference each other and state up front whether they write to the database.
+- **LLMs will invent a placeholder value (e.g. `"the trip id"`) for a required parameter rather than asking, if it's not actually in context** — same pattern as the malformed-id issue above, but preventable at the source. Every tool parameter that takes an id now has explicit docstring language: "never invent, guess, or use placeholder text — ask the user instead." Worth remembering when testing across separate Playground sessions: a trip id established in one conversation doesn't carry into a new one, so give it explicitly in the first message of any fresh session rather than assuming it's still "known."
 
 ## Acknowledgements
 
