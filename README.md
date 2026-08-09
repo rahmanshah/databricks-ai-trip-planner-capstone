@@ -11,8 +11,8 @@ Tracking progress phase by phase. Updated as each is completed.
 - [x] **Phase 0** — Environment setup (Free Edition, LinkedIn verification, Lakebase instance, Git folder)
 - [x] **Phase 1** — Lakebase schema
 - [x] **Phase 2** — Spark ingestion pipeline (Open-Meteo + Wikimedia → Unity Catalog) — *verified end-to-end*
-- [ ] **Phase 3** — Embeddings + pgvector search in Lakebase — *in progress*
-- [ ] **Phase 4** — MCP server + AI agent
+- [x] **Phase 3** — Embeddings + pgvector search in Lakebase — *verified end-to-end*
+- [ ] **Phase 4** — MCP server + AI agent — *up next*
 - [ ] **Phase 5** — Databricks App frontend
 - [ ] **Phase 6** — Change data capture → Delta analytics
 - [ ] **Phase 7** — End-to-end test + submission
@@ -116,6 +116,7 @@ Learned the hard way across the reference repos — documenting up front so they
 - **Calling a deployed app from a notebook needs a token-exchange step**, not a plain `WorkspaceClient().config.authenticate()` call — that only works for service-principal/app-to-app callers.
 - **Each standalone file "Run" gets a fresh, ephemeral serverless environment.** Packages installed by one script run don't persist into the next — scripts that need dependencies should self-install them at the top of their own execution.
 - **`torch`/`sentence-transformers` should be installed via a notebook's Environment side panel**, not mid-script `pip install` — doing it mid-script has caused kernel crashes. `pipeline/ingest_embeddings.py` must be run as an actual notebook, not the file-editor "Run" button.
+- **No relevance floor on search results — flagged for Phase 4.** With only a handful of chunks in the index so far, pgvector's `<=>` always returns *something* as the top match regardless of whether it's actually relevant. Confirmed while testing `search_destinations()` at the end of `pipeline/ingest_embeddings.py`: a query about a coastal city with hiking nearby returned a Mount Rainier clouds/rain chunk as the top result at only 21% similarity — mechanically correct, semantically wrong. Same gap the `weather-intelligence` reference repo hit (they used ~40% as a rough cutoff). The Phase 4 MCP `search_destinations` tool should treat low-similarity results as "no good match" rather than confidently returning the top-k regardless.
 - **Registering an MCP server as a Unity Catalog "MCP Service" via AI Gateway fails with 401 on Free Edition** (the Managed MCP Servers preview isn't enabled). Use the **Custom MCP Server** tool picker in AI Playground/Agent Bricks instead — any deployed app named `mcp-*` is auto-discovered there with no extra registration step.
 - **Grant table access explicitly** if the Postgres role that ran `db/schema.sql` differs from the role the deployed app connects with (`db/grant_app_access.sql`).
 

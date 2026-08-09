@@ -1,11 +1,13 @@
 """
-Phase 0 sanity check — run this before pipeline/ingest_destinations.py.
+Environment sanity check — run before pipeline/ingest_destinations.py and
+again before pipeline/ingest_embeddings.py.
 
 Confirms:
   1. WIKIMEDIA_USER_AGENT has actually been edited away from the placeholder.
-  2. Outbound internet reaches Open-Meteo (geocoding, forecast, air quality)
-     and Wikimedia — Free Edition restricts outbound access to an allowlist
-     until LinkedIn verification is done, so this is the one real unknown.
+  2. Outbound internet reaches Open-Meteo (geocoding, forecast, air quality),
+     Wikimedia, and Hugging Face (Phase 3's embedding model download) — Free
+     Edition restricts outbound access to an allowlist until LinkedIn
+     verification is done, so this is the one real unknown.
   3. The 'lakebase-url' secret (or a local LAKEBASE_URL env var) is set and
      the Lakebase Postgres connection + pgvector extension both work.
 
@@ -116,6 +118,17 @@ def check_wikimedia():
     return f"HTTP {r.status_code}"
 
 
+def check_huggingface():
+    # Metadata endpoint only, not the actual model weights — enough to confirm
+    # reachability without downloading anything sizeable here.
+    r = requests.get(
+        "https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2",
+        timeout=10,
+    )
+    r.raise_for_status()
+    return f"HTTP {r.status_code}"
+
+
 def check_lakebase_connection():
     conn = connect_lakebase(get_lakebase_url())
     try:
@@ -147,10 +160,11 @@ check("Open-Meteo geocoding reachable", check_open_meteo_geocoding)
 check("Open-Meteo forecast reachable", check_open_meteo_forecast)
 check("Open-Meteo air quality reachable", check_open_meteo_air_quality)
 check("Wikimedia REST API reachable", check_wikimedia)
+check("Hugging Face reachable (Phase 3 model download)", check_huggingface)
 check("Lakebase connection", check_lakebase_connection)
 check("pgvector extension", check_pgvector)
 
-print("\n=== Phase 0 environment check ===")
+print("\n=== Environment check ===")
 all_ok = True
 for name, ok, detail in results:
     status = "PASS" if ok else "FAIL"
@@ -159,7 +173,7 @@ for name, ok, detail in results:
     print(f"[{status}] {name}: {detail}")
 
 print(
-    "\nAll checks passed — safe to run pipeline/ingest_destinations.py."
+    "\nAll checks passed — safe to run pipeline/ingest_destinations.py and pipeline/ingest_embeddings.py."
     if all_ok else
-    "\nFix the FAILs above before running pipeline/ingest_destinations.py."
+    "\nFix the FAILs above before running the pipeline notebooks."
 )
